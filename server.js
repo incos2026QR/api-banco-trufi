@@ -27,9 +27,14 @@ app.post('/api/banco/crear-cuenta', (req, res) => {
     return res.status(400).json({ ok: false, mensaje: "La cuenta ya existe" });
   }
 
+  // Asigna el saldo recibido, o 50.00 Bs por defecto si no envían nada
+  const saldoAsignado = (saldoInicial !== undefined && !isNaN(parseFloat(saldoInicial))) 
+    ? parseFloat(saldoInicial) 
+    : 50.00;
+
   cuentasBancarias[cuentaId] = {
     titular: titular,
-    saldo: parseFloat(saldoInicial) || 0.00
+    saldo: saldoAsignado
   };
 
   res.status(201).json({
