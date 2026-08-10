@@ -2,20 +2,20 @@ const express = require('express');
 const cors = require('cors');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Middlewares
 app.use(cors());
 app.use(express.json());
 
-// 1. BASE DE DATOS EN MEMORIA (Inicia con 2 cuentas de prueba)
-const cuentasBancarias = {
-  "CTA-1001": { titular: "Pasajero Juan", saldo: 50.00 },
-  "CTA-2002": { titular: "Chofer Pedro", saldo: 10.00 }
-};
+// Base de datos en memoria para el banco simulado
+const cuentasBancarias = {};
 
-const transacciones = [];
+// 1. Obtener todas las cuentas (Panel / Depuración)
+app.get('/api/banco/cuentas', (req, res) => {
+  res.json({ ok: true, cuentas: cuentasBancarias });
+});
 
-// 2. ENDPOINT: Crear una nueva cuenta bancaria
+// 2. Crear una nueva cuenta bancaria
 app.post('/api/banco/crear-cuenta', (req, res) => {
   const { cuentaId, titular, saldoInicial } = req.body;
 
@@ -27,9 +27,8 @@ app.post('/api/banco/crear-cuenta', (req, res) => {
     return res.status(400).json({ ok: false, mensaje: "La cuenta ya existe" });
   }
 
-  // Asigna el saldo recibido, o 50.00 Bs por defecto si no envían nada
-  const saldoAsignado = (saldoInicial !== undefined && !isNaN(parseFloat(saldoInicial))) 
-    ? parseFloat(saldoInicial) 
+  const saldoAsignado = (saldoInicial !== undefined && !isNaN(parseFloat(saldoInicial)))
+    ? parseFloat(saldoInicial)
     : 50.00;
 
   cuentasBancarias[cuentaId] = {
@@ -44,88 +43,76 @@ app.post('/api/banco/crear-cuenta', (req, res) => {
   });
 });
 
-// 3. ENDPOINT: Ver TODAS las cuentas registradas
-app.get('/api/banco/cuentas', (req, res) => {
-  res.json({ ok: true, cuentas: cuentasBancarias });
-});
-
-// 4. ENDPOINT: Consultar saldo de una cuenta especifica
+// 3. Consultar saldo de una cuenta
 app.get('/api/banco/saldo/:cuentaId', (req, res) => {
   const { cuentaId } = req.params;
   const cuenta = cuentasBancarias[cuentaId];
 
   if (!cuenta) {
-    return res.status(404).json({ ok: false, mensaje: "Cuenta no encontrada" });
+    return res.status(404).json({ ok: false, mensaje: "Cuenta bancaria no encontrada" });
   }
-
-  res.json({ ok: true, cuenta: cuentaId, titular: cuenta.titular, saldo: cuenta.saldo });
-});
-
-// 5. ENDPOINT: Recargar saldo
-app.post('/api/banco/recargar', (req, res) => {
-  const { cuentaId, monto } = req.body;
-
-  if (!cuentasBancarias[cuentaId]) {
-    return res.status(404).json({ ok: false, mensaje: "La cuenta no existe" });
-  }
-  if (!monto || monto <= 0) {
-    return res.status(400).json({ ok: false, mensaje: "Monto inválido" });
-  }
-
-  cuentasBancarias[cuentaId].saldo += parseFloat(monto);
 
   res.json({
     ok: true,
-    mensaje: "Recarga exitosa",
-    nuevoSaldo: cuentasBancarias[cuentaId].saldo
+    cuenta: cuentaId,
+    titular: cuenta.titular,
+    saldo: cuenta.saldo
   });
 });
 
-// 6. ENDPOINT PRINCIPAL: Procesar Cobro de Pasaje
-app.post('/api/banco/pagar-pasaje', (req, res) => {
-  const { cuentaOrigen, cuentaDestino, monto, tarifaTipo, cantidadPasajes, latitud, longitud } = req.body;
+// 4. Recargar Saldo en la App (RESTAR/DEBITAR del Banco)
+app.post('/api/banco/recargar', (req, res) => {
+  const { cuentaId, monto } = req.body;
+  const montoNum = parseFloat(monto);
 
-  const origen = cuentasBancarias[cuentaOrigen];
-  const destino = cuentasBancarias[cuentaDestino];
-
-  if (!origen || !destino) {
-    return res.status(404).json({ ok: false, mensaje: "Una de las cuentas bancarias no existe" });
+  if (!cuentaId || isNaN(montoNum) || montoNum <= 0) {
+    return res.status(400).json({ ok: false, mensaje: "Cuenta ID o monto inválido" });
   }
 
-  if (origen.saldo < monto) {
-    return res.status(400).json({
-      ok: false,
-      codigo: "SALDO_INSUFICIENTE",
-      mensaje: "Fondos insuficientes para realizar el pago del pasaje"
-    });
+  const cuenta = cuentasBancarias[cuentaId];
+  if (!cuenta) {
+    return res.status(404).json({ ok: false, mensaje: "Cuenta bancaria no encontrada" });
   }
 
-  origen.saldo -= parseFloat(monto);
-  destino.saldo += parseFloat(monto);
+  // Verificar si el banco tiene fondos para hacer la recarga
+  if (cuenta.saldo < montoNum) {
+    return res.status(400).json({ ok: false, mensaje: "Saldo bancario insuficiente para esta recarga" });
+  }
 
-  const nuevaTransaccion = {
-    id: "TXN-" + Date.now(),
-    cuentaOrigen,
-    cuentaDestino,
-    montoProcesado: monto,
-    tarifaTipo,
-    cantidadPasajes,
-    gps: { latitud, longitud },
-    fecha: new Date().toISOString()
-  };
+  // CORRECCIÓN: Restar del banco porque el dinero pasa a la App
+  cuenta.saldo -= montoNum;
 
-  transacciones.push(nuevaTransaccion);
-
-  res.status(200).json({
+  res.json({
     ok: true,
-    mensaje: "Cobro completado con éxito",
-    transaccion: nuevaTransaccion,
-    saldoRestanteOrigen: origen.saldo
+    mensaje: "Recarga procesada exitosamente. Fondos debitados del banco.",
+    nuevoSaldo: cuenta.saldo
   });
 });
 
-// Configuración del Puerto para Render/Producción o Local (3000)
-const PORT = process.env.PORT || 3000;
+// 5. Retirar Ganancias del Chofer (SUMAR/ACREDITAR al Banco)
+app.post('/api/banco/retirar-ganancias', (req, res) => {
+  const { cuentaId, monto } = req.body;
+  const montoNum = parseFloat(monto);
+
+  if (!cuentaId || isNaN(montoNum) || montoNum <= 0) {
+    return res.status(400).json({ ok: false, mensaje: "Cuenta ID o monto inválido" });
+  }
+
+  const cuenta = cuentasBancarias[cuentaId];
+  if (!cuenta) {
+    return res.status(404).json({ ok: false, mensaje: "Cuenta bancaria no encontrada" });
+  }
+
+  // Sumar el dinero ganado al banco del chofer
+  cuenta.saldo += montoNum;
+
+  res.json({
+    ok: true,
+    mensaje: "Ganancias transferidas exitosamente a la cuenta bancaria.",
+    nuevoSaldo: cuenta.saldo
+  });
+});
+
 app.listen(PORT, () => {
-  console.log(`🚀 API Bancaria Simulada ejecutándose en el puerto ${PORT}`);
+  console.log(`Servidor de API bancaria ejecutándose en el puerto ${PORT}`);
 });
